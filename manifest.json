@@ -1,20 +1,45 @@
 {
-  "name": "Control Inventario Alpina - Don Maíz",
-  "short_name": "Inv Alpina",
+  "name": "CONTROL INV ALPINA - DON MAIZ",
+  "short_name": "CONTROL INV",
+  "description": "Recibo, Inventario Cíclico, Averías y Corta Fecha · Alpina - Don Maíz",
+  "id": "recinv-alpina-donmaiz",
   "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#0A3D91",
-  "theme_color": "#0A3D91",
+  "orientation": "portrait",
+  "background_color": "#13316F",
+  "theme_color": "#13316F",
+  "lang": "es-CO",
+  "dir": "ltr",
+  "categories": [
+    "business",
+    "productivity",
+    "utilities"
+  ],
   "icons": [
     {
-      "src": "icon_192x192.png",
+      "src": "./icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "icon_512x512.png",
+      "src": "./icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
