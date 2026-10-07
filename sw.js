@@ -1,8 +1,14 @@
-/* RECINV ALPINA DON MAIZ - Service Worker
-   Estrategia: cache-first. En la primera carga guarda la app completa;
-   desde ahí abre sin internet, sin señal y sin datos. */
+/* CONTROL INV ALPINA - DON MAIZ - Service Worker
+   Estrategia: abre al instante desde la copia guardada (funciona sin
+   internet, sin señal y sin datos) y, si hay conexión, descarga en
+   segundo plano la versión más reciente para la próxima apertura.
 
-const CACHE = 'recinv-alpina-donmaiz-v1';
+   IMPORTANTE: cada vez que subas una versión nueva de la app, cambia
+   el número de VERSION de abajo. Así los celulares descargan lo nuevo
+   en vez de quedarse con la copia vieja. */
+
+const VERSION = 'v3.3';
+const CACHE = 'recinv-alpina-donmaiz-' + VERSION;
 
 const ASSETS = [
   './',
@@ -16,7 +22,8 @@ const ASSETS = [
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE)
-      .then(cache => cache.addAll(ASSETS))
+      // cache:'reload' evita que el navegador entregue una copia vieja al instalar
+      .then(cache => cache.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' }))))
       .catch(() => {})
       .then(() => self.skipWaiting())
   );
@@ -35,28 +42,37 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const req = event.request;
 
+  // Solo páginas y archivos propios de la app. Todo lo demás (por ejemplo
+  // el envío a Google Drive) pasa directo, sin que el service worker lo toque.
   if (req.method !== 'GET') return;
   if (!req.url.startsWith('http')) return;
+  if (new URL(req.url).origin !== self.location.origin) return;
 
   event.respondWith(
-    caches.match(req).then(hit => {
-      if (hit) return hit;
+    caches.open(CACHE).then(cache =>
+      cache.match(req).then(hit => {
+        const red = fetch(req)
+          .then(res => {
+            if (res && res.status === 200 && res.type === 'basic') {
+              cache.put(req, res.clone()).catch(() => {});
+            }
+            return res;
+          })
+          .catch(() => null);
 
-      return fetch(req)
-        .then(res => {
-          if (res && res.status === 200 && res.type === 'basic') {
-            const copy = res.clone();
-            caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
-          }
-          return res;
-        })
-        .catch(() => {
-          // Sin red: si piden una página, servimos la app cacheada.
+        if (hit) {
+          event.waitUntil(red); // actualiza la copia guardada en segundo plano
+          return hit;
+        }
+
+        return red.then(res => {
+          if (res) return res;
           if (req.mode === 'navigate') {
-            return caches.match('./index.html');
+            return cache.match('./index.html').then(p => p || new Response('', { status: 504, statusText: 'Sin conexión' }));
           }
           return new Response('', { status: 504, statusText: 'Sin conexión' });
         });
-    })
+      })
+    )
   );
 });
