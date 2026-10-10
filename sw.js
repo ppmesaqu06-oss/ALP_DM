@@ -15,7 +15,7 @@
    IMPORTANTE: cada vez que subas una versión nueva de la app, cambia el
    número de VERSION de abajo. Así los celulares descargan lo nuevo. */
 
-const VERSION = 'v3.4';
+const VERSION = 'v3.5';
 const PREFIJO = 'recinv-alpina-donmaiz-';
 const CACHE = PREFIJO + VERSION;
 const PRINCIPAL = './index.html';

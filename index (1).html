@@ -306,7 +306,7 @@ tbody tr:nth-child(even){background:var(--input-bg);}
     <div id="pesoAviso" style="margin:-4px 0 10px; color:#555; font-size:0.85em;"></div>
     <div class="table-scroll" style="max-height:220px; overflow-y:auto;">
       <table style="width:100%; font-size:0.85em;">
-        <thead><tr><th>Fecha</th><th>Remolque</th><th>Kg</th><th></th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Remolque ▸ SKU</th><th>Kg</th><th></th><th></th></tr></thead>
         <tbody id="pesoHistorialBody"></tbody>
       </table>
     </div>
@@ -507,7 +507,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // seguridad fuerte, el código de la app es público; la protección real
     // de los datos está en los permisos de Google Drive.
     // ============================================================
-    const APP_VERSION = 'v3.4';
+    const APP_VERSION = 'v3.5';
     const CENTROS = {
         '4803': { nombre: 'Antioquia',    archivo: 'ANTIOQUIA-4803' },
         '4801': { nombre: 'Sopó',         archivo: 'SOPO-4801' },
@@ -716,6 +716,82 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         return { items, kg, sinPeso, estimados };
     }
 
+    // ------------------------------------------------------------
+    // PESO POR SKU. Un mismo SKU puede venir en varias líneas (una por fecha
+    // de vencimiento): aquí se junta POR SKU y se calcula su peso; después
+    // se suma el total de unidades recibidas y el total de peso del viaje.
+    // ------------------------------------------------------------
+    function compararSku(a, b) {
+        const na = /^\d+$/.test(a), nb = /^\d+$/.test(b);
+        if (na && nb) return parseInt(a, 10) - parseInt(b, 10);
+        if (na !== nb) return na ? -1 : 1;
+        return a < b ? -1 : (a > b ? 1 : 0);
+    }
+
+    function agruparItemsPorSku(items) {
+        const mapa = {};
+        (items || []).forEach(it => {
+            const ref = String(it.REFERENCIA);
+            let g = mapa[ref];
+            if (!g) {
+                g = mapa[ref] = { REFERENCIA: ref, DESCRIPCION: it.DESCRIPCION || '', CUBETAS: 0, SUELTAS: 0, UNIDADES: 0, PESO_KG: 0, FUENTE: 'tabla' };
+            }
+            g.CUBETAS += Number(it.CUBETAS) || 0;
+            g.SUELTAS += Number(it.UNIDADES) || 0;
+            g.UNIDADES += Number(it.FISICO) || 0;
+            g.PESO_KG += Number(it.PESO_KG) || 0;
+            if (it.PESO_FUENTE === 'sin_peso') g.FUENTE = 'sin_peso';
+            else if (it.PESO_FUENTE === 'descripcion' && g.FUENTE === 'tabla') g.FUENTE = 'descripcion';
+        });
+        return Object.keys(mapa).sort(compararSku).map(ref => {
+            const g = mapa[ref];
+            g.EMB = g.CUBETAS > 0 ? Math.round(((g.UNIDADES - g.SUELTAS) / g.CUBETAS) * 1000) / 1000 : 0;
+            const info = infoPeso(ref);
+            g.GRAMAJE = (g.UNIDADES > 0 && g.PESO_KG > 0) ? Math.round(g.PESO_KG * 1000 / g.UNIDADES * 100) / 100 : (info ? info.gramaje : 0);
+            return g;
+        });
+    }
+
+    function totalesViaje(v) {
+        const g = agruparItemsPorSku(v.items);
+        return {
+            skus: g.length,
+            cubetas: g.reduce((a, s) => a + s.CUBETAS, 0),
+            sueltas: g.reduce((a, s) => a + s.SUELTAS, 0),
+            unidades: g.reduce((a, s) => a + s.UNIDADES, 0),
+            kg: g.reduce((a, s) => a + s.PESO_KG, 0)
+        };
+    }
+
+    function fmtNum(n, dec) {
+        const x = Number(n) || 0;
+        return x.toLocaleString('en-US', { minimumFractionDigits: dec || 0, maximumFractionDigits: dec === undefined ? 2 : dec });
+    }
+
+    function htmlDetalleViaje(v) {
+        const g = agruparItemsPorSku(v.items);
+        const t = totalesViaje(v);
+        let h = '<table style="width:100%; font-size:0.95em; background:#f6f8fc;"><thead><tr><th>SKU</th><th style="text-align:left;">Descripción</th><th>Unidades</th><th>Kg</th></tr></thead><tbody>';
+        g.forEach(s => {
+            h += '<tr><td>' + escHtml(s.REFERENCIA) + (s.FUENTE === 'sin_peso' ? ' ⚠️' : '') + '</td><td style="text-align:left;">' + escHtml(s.DESCRIPCION) + '</td><td>' +
+                fmtNum(s.UNIDADES) + '</td><td>' + fmtNum(s.PESO_KG, 1) + '</td></tr>';
+        });
+        h += '</tbody><tfoot><tr style="font-weight:800; background:#ffe9a8;"><td colspan="2" style="text-align:left;">TOTAL unidades recibidas · peso total</td><td>' +
+            fmtNum(t.unidades) + '</td><td>' + fmtNum(t.kg, 1) + '</td></tr></tfoot></table>' +
+            '<div style="margin-top:4px; color:#555;">' + t.skus + ' SKU · ' + fmtNum(t.kg / 1000, 3) + ' ton</div>';
+        return h;
+    }
+
+    window.togglePesoDetalle = function (celda) {
+        const fila = celda && celda.parentNode;
+        const det = fila && fila.nextElementSibling;
+        if (!det || det.className !== 'pesoDet') return;
+        const abre = det.style.display === 'none';
+        det.style.display = abre ? 'table-row' : 'none';
+        const flecha = celda.querySelector('.pesoFlecha');
+        if (flecha) flecha.textContent = abre ? '▾ ' : '▸ ';
+    };
+
     function nuevoViaje(remolque, fecha, numero, bloque) {
         return {
             CENTRO: window.centroActual,
@@ -840,8 +916,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (!cont || !tbody) return;
         const lista = viajesDelCentro();
         const totalKg = lista.reduce((a, v) => a + v.PESO_TOTAL_KG, 0);
+        const totalUnid = lista.reduce((a, v) => a + totalesViaje(v).unidades, 0);
         const sinConfirmar = lista.filter(v => !v.SINCRONIZADO && !v.CORREO_ENVIADO).length;
-        cont.textContent = lista.length + ' viaje(s) de ' + etiquetaCentro() + ' · ' + (totalKg / 1000).toFixed(2) + ' ton acumuladas' +
+        cont.textContent = lista.length + ' viaje(s) de ' + etiquetaCentro() + ' · ' + fmtNum(totalUnid) + ' unidades recibidas · ' + (totalKg / 1000).toFixed(2) + ' ton acumuladas' +
             (sinConfirmar > 0 ? ' · ' + sinConfirmar + ' por enviar' : '');
         tbody.innerHTML = '';
         lista.slice().reverse().forEach(v => {
@@ -850,11 +927,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             const titulo = v.SINCRONIZADO ? 'Guardado en Google Drive' : (v.CORREO_ENVIADO ? 'Enviado por correo: se guarda en Drive en unos minutos' : (v.ESTADO_DRIVE === 'sin_confirmar' ? 'Enviado, sin confirmación' : 'Pendiente de enviar'));
             const num = (v.VIAJE_NUM && v.VIAJE_NUM > 1) ? ' #' + v.VIAJE_NUM : '';
             const tr = document.createElement('tr');
-            tr.innerHTML = '<td>' + escHtml(v.FECHA) + '</td><td>' + escHtml(v.REMOLQUE || '(sin dato)') + num + '</td>' +
+            tr.innerHTML = '<td>' + escHtml(v.FECHA) + '</td><td onclick="togglePesoDetalle(this)" style="cursor:pointer; font-weight:700;" title="Toca para ver el peso por SKU"><span class="pesoFlecha">▸ </span>' + escHtml(v.REMOLQUE || '(sin dato)') + num + '</td>' +
                 '<td>' + v.PESO_TOTAL_KG.toFixed(1) + '</td>' +
                 '<td title="' + titulo + '">' + icono + '</td>' +
                 '<td><button onclick="eliminarViajeHistorial(' + idxReal + ')" style="background:#e74c3c;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:12px;cursor:pointer;">❌</button></td>';
             tbody.appendChild(tr);
+            const trDet = document.createElement('tr');
+            trDet.className = 'pesoDet';
+            trDet.style.display = 'none';
+            trDet.innerHTML = '<td colspan="5" style="padding:6px 4px;">' + htmlDetalleViaje(v) + '</td>';
+            tbody.appendChild(trDet);
         });
         pintarEnlaceLibro();
     }
@@ -1176,13 +1258,118 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
         const viajesOrdenados = viajesDelCentro().sort((a, b) => parseFechaViaje(a.FECHA) - parseFechaViaje(b.FECHA));
 
+        const FMT_UND = '#,##0.##', FMT_KG = '#,##0.000';
+        const redondear = (n, d) => Number((Number(n) || 0).toFixed(d));
+
+        // Fila de totales (amarilla) que pinta TODAS las columnas, aunque estén vacías.
+        function filaTotalCompleta(ws, vals) {
+            const row = ws.addRow(vals);
+            for (let c = 1; c <= vals.length; c++) {
+                const cell = row.getCell(c);
+                cell.border = thinBorder;
+                cell.font = { name: 'Calibri', size: 10.5, bold: true, color: { argb: DARKTXT } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: YELLOW } };
+            }
+            return row;
+        }
+
+        // --- Hoja: Detalle por SKU (peso por SKU y, al final de cada remolque, el total de unidades recibidas) ---
+        {
+            const cols = ['Fecha', 'Remolque', 'Viaje #', 'SKU', 'Descripción', 'Cubetas', 'Und. sueltas', 'Und. por cubeta', 'Total unidades', 'Gramos por und.', 'Peso (Kg)', 'Peso (Ton)'];
+            const ws = hojaConEncabezado('Detalle por SKU', 'Peso por SKU y Total por Remolque', cols);
+            [12, 20, 9, 12, 46, 10, 12, 13, 14, 14, 14, 13].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+            ws.views = [{ state: 'frozen', ySplit: 2 }];
+            const conFormato = row => {
+                [6, 7, 8, 9, 10].forEach(c => { row.getCell(c).numFmt = FMT_UND; });
+                row.getCell(11).numFmt = FMT_KG; row.getCell(12).numFmt = FMT_KG;
+            };
+            let gCub = 0, gSue = 0, gUni = 0, gKg = 0;
+            viajesOrdenados.forEach(v => {
+                const grupos = agruparItemsPorSku(v.items);
+                if (!grupos.length) return;
+                const ini = ws.rowCount + 1;
+                let sCub = 0, sSue = 0, sUni = 0, sKg = 0;
+                grupos.forEach(s => {
+                    const kg = redondear(s.PESO_KG, 3);
+                    const row = filaDatos(ws, [v.FECHA, v.REMOLQUE || '(sin dato)', v.VIAJE_NUM || 1, s.REFERENCIA, s.DESCRIPCION, s.CUBETAS, s.SUELTAS, s.EMB, s.UNIDADES, s.GRAMAJE, kg, null]);
+                    row.getCell(12).value = { formula: 'K' + row.number + '/1000', result: kg / 1000 };
+                    conFormato(row);
+                    sCub += s.CUBETAS; sSue += s.SUELTAS; sUni += s.UNIDADES; sKg += kg;
+                });
+                const fin = ws.rowCount;
+                const etiqueta = 'TOTAL REMOLQUE ' + (v.REMOLQUE || '(sin dato)') + (v.VIAJE_NUM > 1 ? ' #' + v.VIAJE_NUM : '');
+                const tot = filaTotalCompleta(ws, [
+                    '', etiqueta, '', '', 'Total unidades recibidas y peso →',
+                    { formula: 'SUM(F' + ini + ':F' + fin + ')', result: sCub },
+                    { formula: 'SUM(G' + ini + ':G' + fin + ')', result: sSue },
+                    '',
+                    { formula: 'SUM(I' + ini + ':I' + fin + ')', result: sUni },
+                    '',
+                    { formula: 'SUM(K' + ini + ':K' + fin + ')', result: redondear(sKg, 3) },
+                    { formula: 'SUM(L' + ini + ':L' + fin + ')', result: sKg / 1000 }
+                ]);
+                conFormato(tot);
+                ws.addRow([]);
+                gCub += sCub; gSue += sSue; gUni += sUni; gKg += sKg;
+            });
+            if (ws.rowCount > 2) {
+                const ult = ws.rowCount;
+                const suma = col => ({ formula: 'SUMIF($B$3:$B$' + ult + ',"TOTAL REMOLQUE*",' + col + '$3:' + col + '$' + ult + ')' });
+                const tg = filaTotalCompleta(ws, [
+                    '', 'TOTAL GENERAL', '', '', 'Total unidades recibidas y peso →',
+                    Object.assign(suma('F'), { result: gCub }),
+                    Object.assign(suma('G'), { result: gSue }),
+                    '',
+                    Object.assign(suma('I'), { result: gUni }),
+                    '',
+                    Object.assign(suma('K'), { result: redondear(gKg, 3) }),
+                    Object.assign(suma('L'), { result: gKg / 1000 })
+                ]);
+                conFormato(tg);
+            }
+        }
+
+        // --- Hoja: Consolidado SKU (todos los viajes del reporte, un renglón por SKU) ---
+        {
+            const ws = hojaConEncabezado('Consolidado SKU', 'Total por SKU (todos los viajes de este reporte)', ['SKU', 'Descripción', '# Viajes', 'Total unidades', 'Gramos por und.', 'Peso (Kg)', 'Peso (Ton)']);
+            [12, 46, 11, 15, 15, 14, 13].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+            ws.views = [{ state: 'frozen', ySplit: 2 }];
+            const acc = {};
+            viajesOrdenados.forEach(v => agruparItemsPorSku(v.items).forEach(s => {
+                const a = acc[s.REFERENCIA] || (acc[s.REFERENCIA] = { desc: s.DESCRIPCION, n: 0, u: 0, kg: 0 });
+                a.n++; a.u += s.UNIDADES; a.kg += redondear(s.PESO_KG, 3);
+            }));
+            const refs = Object.keys(acc).sort(compararSku);
+            const ini = 3;
+            let tU = 0, tKg = 0;
+            refs.forEach(ref => {
+                const a = acc[ref];
+                const gr = (a.u > 0 && a.kg > 0) ? redondear(a.kg * 1000 / a.u, 2) : 0;
+                const row = filaDatos(ws, [ref, a.desc, a.n, a.u, gr, redondear(a.kg, 3), null]);
+                row.getCell(7).value = { formula: 'F' + row.number + '/1000', result: redondear(a.kg, 3) / 1000 };
+                row.getCell(4).numFmt = FMT_UND; row.getCell(5).numFmt = FMT_UND;
+                row.getCell(6).numFmt = FMT_KG; row.getCell(7).numFmt = FMT_KG;
+                tU += a.u; tKg += redondear(a.kg, 3);
+            });
+            if (refs.length) {
+                const fin = ws.rowCount;
+                const tot = filaTotalCompleta(ws, [
+                    '', 'TOTAL', '', { formula: 'SUM(D' + ini + ':D' + fin + ')', result: tU }, '',
+                    { formula: 'SUM(F' + ini + ':F' + fin + ')', result: redondear(tKg, 3) },
+                    { formula: 'SUM(G' + ini + ':G' + fin + ')', result: tKg / 1000 }
+                ]);
+                tot.getCell(4).numFmt = FMT_UND; tot.getCell(6).numFmt = FMT_KG; tot.getCell(7).numFmt = FMT_KG;
+            }
+        }
+
         // --- Hoja 1: Historial ---
         {
             const ws = hojaConEncabezado('Historial', 'Historial de Viajes — Peso por Remolque', ['Fecha', 'Remolque', '# SKU', 'Total Unidades', 'Peso (Kg)', 'Peso (Ton)']);
             let totalKg = 0;
             viajesOrdenados.forEach(v => {
                 const totalUnid = v.items.reduce((a, it) => a + (it.FISICO || 0), 0);
-                filaDatos(ws, [v.FECHA, v.REMOLQUE || '(sin dato)', v.items.length, totalUnid, Number(v.PESO_TOTAL_KG.toFixed(2)), Number((v.PESO_TOTAL_KG / 1000).toFixed(3))]);
+                const skusDistintos = new Set(v.items.map(it => String(it.REFERENCIA))).size;
+                filaDatos(ws, [v.FECHA, v.REMOLQUE || '(sin dato)', skusDistintos, totalUnid, Number(v.PESO_TOTAL_KG.toFixed(2)), Number((v.PESO_TOTAL_KG / 1000).toFixed(3))]);
                 totalKg += v.PESO_TOTAL_KG;
             });
             if (viajesOrdenados.length) {
@@ -1259,6 +1446,27 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             }
         }
 
+        // --- Hoja: DATOS (tabla plana, un renglón por SKU y viaje). Es la que lee el consolidado de Google. No la modifiques. ---
+        {
+            const ws = wb.addWorksheet('DATOS', { properties: { tabColor: { argb: 'FF9AA5B1' } } });
+            const enc = ['CENTRO', 'REGIONAL', 'FECHA', 'REMOLQUE', 'VIAJE', 'REFERENCIA', 'DESCRIPCION', 'CUBETAS', 'UNIDADES_SUELTAS', 'UNIDADES_POR_CUBETA', 'TOTAL_UNIDADES', 'GRAMOS_POR_UNIDAD', 'PESO_KG', 'PESO_TON', 'FUENTE_PESO', 'REGISTRADO'];
+            const hr = ws.addRow(enc);
+            hr.eachCell(cell => {
+                cell.font = { name: 'Calibri', size: 10.5, bold: true, color: { argb: WHITE } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF5B6B7C' } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            });
+            [9, 14, 12, 18, 7, 12, 44, 9, 11, 11, 11, 11, 11, 11, 12, 26].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+            ws.views = [{ state: 'frozen', ySplit: 1 }];
+            viajesOrdenados.forEach(v => {
+                const cod = String(v.CENTRO || window.centroActual || '');
+                const reg = CENTROS[cod] ? CENTROS[cod].nombre : '';
+                agruparItemsPorSku(v.items).forEach(s => {
+                    ws.addRow([cod, reg, v.FECHA, v.REMOLQUE || '(sin dato)', v.VIAJE_NUM || 1, s.REFERENCIA, s.DESCRIPCION, s.CUBETAS, s.SUELTAS, s.EMB, s.UNIDADES, s.GRAMAJE, redondear(s.PESO_KG, 3), redondear(s.PESO_KG / 1000, 6), s.FUENTE, v.FECHA_REGISTRO || '']);
+                });
+            });
+        }
+
         // Marca de agua tenue en la hoja principal, igual que en los demas reportes.
         if (wb.worksheets[0]) {
             const ws0 = wb.worksheets[0];
@@ -1302,7 +1510,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             link.href = url; link.download = fileName;
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
             setTimeout(() => URL.revokeObjectURL(url), 4000);
-            alert('Tu navegador no permite compartir archivos directamente. Se descargó el reporte: adjúntalo manualmente en WhatsApp.\n\nArchivo: ' + fileName);
+            alert('Tu navegador no permite compartir archivos directamente. Se descargó el reporte: adjúntalo manualmente en tu correo o en WhatsApp.\n\nArchivo: ' + fileName);
         } catch (err) {
             alert('No se pudo generar el reporte de peso.\n\nDetalle: ' + (err && err.message ? err.message : err));
         }
@@ -1816,7 +2024,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             UNIDADES: uVal,
             FISICO: parseFloat(fis.value) || 0,
             FECHA_VENCIMIENTO: vencimiento.value,
-            FECHA_DIGITACION: now.toLocaleString('es-CO'),
+            FECHA_DIGITACION: now.toLocaleString('en-US'),
             TIMESTAMP: now.getTime(),
             MODO: operationMode.value,
             CENTRO: window.centroActual || '',
